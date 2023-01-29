@@ -12,15 +12,15 @@ void ofApp::setup() {
 	InitParameters init_parameters;
 
 	init_parameters.svo_real_time_mode = true;
-	sl::String path = sl::String(ofToDataPath("recordings/retire-tour-lente-4.svo").c_str());
+	sl::String path = sl::String(ofToDataPath("recordings/retire-tour-lente-2.svo").c_str());
 	init_parameters.input.setFromSVOFile(path);
-	init_parameters.camera_resolution = RESOLUTION::HD720;
+	//init_parameters.camera_resolution = RESOLUTION::HD720;
 	// On Jetson the object detection combined with an heavy depth mode could reduce the frame rate too much
 	init_parameters.depth_mode = DEPTH_MODE::QUALITY;
 	init_parameters.coordinate_system = COORDINATE_SYSTEM::RIGHT_HANDED_Y_UP;
 	init_parameters.coordinate_units = UNIT::CENTIMETER;
-	init_parameters.camera_fps = 60;
-	init_parameters.sdk_verbose = 1;
+	//init_parameters.camera_fps = 60;
+	//init_parameters.sdk_verbose = 1;
 
 	auto returned_state = zed.open(init_parameters);
 	if (returned_state != ERROR_CODE::SUCCESS) {
@@ -40,7 +40,7 @@ void ofApp::setup() {
 
 	ObjectDetectionParameters obj_det_params;
 	obj_det_params.enable_tracking = true; // track people across images flow
-	obj_det_params.enable_body_fitting = false;// smooth skeletons moves
+	obj_det_params.enable_body_fitting = true;// smooth skeletons moves
 	obj_det_params.body_format = sl::BODY_FORMAT::POSE_34;
 	obj_det_params.detection_model = DETECTION_MODEL::HUMAN_BODY_FAST;
 	returned_state = zed.enableObjectDetection(obj_det_params);
@@ -61,37 +61,69 @@ void ofApp::setup() {
 
 	//Initialize the training and info variables
 	infoText = "";
-	trainingClassLabel = 1;
-	predictedClassLabel = 0;
-	trainingModeActive = false;
+	trainingClassLabelBody = 1;
+	trainingClassLabelArms = 1;
+	trainingClassLabelLegs = 1;
+	predictedClassLabelBody = 0;
+	predictedClassLabelArms = 0;
+	predictedClassLabelLegs = 0;
+	trainingModeBodyActive = false;
+	trainingModeArmsActive = false;
+	trainingModeLegsActive = false;
 	recordTrainingData = false;
-	predictionModeActive = false;
+	grabFrame = true;
+	predictionModeActiveBody = false;
+	predictionModeActiveArms = false;
+	predictionModeActiveLegs = false;
 	drawInfo = true;
 	body.resize(7 * 34);
-	left_arm.resize(7 * 7);
-	right_arm.resize(7 * 7);
-	left_leg.resize(7 * 4);
-	right_leg.resize(7 * 4);
+	legs.resize(7 * 8);
+	arms.resize(7 * 14);
 
 	//The input to the training data will be the [x y z] from the left and right hand, so we set the number of dimensions to 6
 	trainingDataBody.setNumDimensions(body.getSize());
-	//trainingDataLeftArm.setNumDimensions(left_arm.getSize());
-	//trainingDataRightArm.setNumDimensions(right_arm.getSize());
-	//trainingDataLeftLeg.setNumDimensions(left_leg.getSize());
-	//trainingDataRightLeg.setNumDimensions(right_leg.getSize());
+	trainingDataArms.setNumDimensions(arms.getSize());
+	trainingDataLegs.setNumDimensions(legs.getSize());
 
 	//set the default classifier
-	ANBC naiveBayes;
-	naiveBayes.enableNullRejection(true);
-	naiveBayes.setNullRejectionCoeff(5.0);
-	pipeline << MovingAverageFilter(5, trainingDataBody.getNumDimensions());
-	pipeline << EnvelopeExtractor(15, trainingDataBody.getNumDimensions());
-	pipeline << naiveBayes;
+	ANBC naiveBayesBody;
+	naiveBayesBody.enableNullRejection(true);
+	naiveBayesBody.setNullRejectionCoeff(5.0);
+	pipelineBody << MovingAverageFilter(5, trainingDataBody.getNumDimensions());
+	pipelineBody << EnvelopeExtractor(15, trainingDataBody.getNumDimensions());
+	pipelineBody << naiveBayesBody;
 
-	bodyPlot.setup(500, body.getSize(), "body hand");
+	ANBC naiveBayesArms;
+	naiveBayesArms.enableNullRejection(true);
+	naiveBayesArms.setNullRejectionCoeff(5.0);
+	pipelineArms << MovingAverageFilter(5, trainingDataArms.getNumDimensions());
+	pipelineArms << EnvelopeExtractor(15, trainingDataArms.getNumDimensions());
+	pipelineArms << naiveBayesArms;
+
+	ANBC naiveBayesLegs;
+	naiveBayesLegs.enableNullRejection(true);
+	naiveBayesLegs.setNullRejectionCoeff(5.0);
+	pipelineLegs << MovingAverageFilter(5, trainingDataLegs.getNumDimensions());
+	pipelineLegs << EnvelopeExtractor(15, trainingDataLegs.getNumDimensions());
+	pipelineLegs << naiveBayesLegs;
+
+
+	bodyPlot.setup(500, body.getSize(), "body");
 	bodyPlot.setDrawGrid(true);
 	bodyPlot.setDrawInfoText(false);
 	bodyPlot.setFont(smallFont);
+	bodyPlot.setBackgroundColor(ofColor(255, 255, 255));
+
+	armsPlot.setup(500, arms.getSize(), "arms");
+	armsPlot.setDrawGrid(true);
+	armsPlot.setDrawInfoText(false);
+	armsPlot.setFont(smallFont);
+	armsPlot.setBackgroundColor(ofColor(255, 255, 255));
+
+	legsPlot.setup(500, legs.getSize(), "legs");
+	legsPlot.setDrawGrid(true);
+	legsPlot.setDrawInfoText(false);
+	legsPlot.setFont(smallFont);
 	bodyPlot.setBackgroundColor(ofColor(255, 255, 255));
 	colorBuffer = new unsigned char[zedWidth * zedHeight * 3];
 
@@ -99,6 +131,8 @@ void ofApp::setup() {
 	setup_comms();
 
 	nodeBody.assign(34, ofNode());
+	frame = 0;
+	numFrames = zed.getSVONumberOfFrames();
 }
 
 void ofApp::setup_comms()
@@ -115,7 +149,12 @@ void ofApp::setup_comms()
 
 //--------------------------------------------------------------
 void ofApp::update() {
-	auto state = zed.grab();
+	ERROR_CODE state = ERROR_CODE::FAILURE;
+	if (grabFrame) {
+		state = zed.grab();
+		frame = (frame + 1) % numFrames;
+	}
+	
 	if (state == ERROR_CODE::SUCCESS) {
 
 		// Retrieve Detected Human Bodies
@@ -139,110 +178,98 @@ void ofApp::update() {
 
 				nodeBody[i].setPosition(zed_body.keypoint[i].x, zed_body.keypoint[i].y, zed_body.keypoint[i].z);
 			}
-			
-			bodyPlot.update(body);
-			
-			j = 0;
-			for (int i = 4; i <= 10; i++) 
-			{
-				left_arm[j++] = zed_body.keypoint[i].x;
-				left_arm[j++] = zed_body.keypoint[i].y;
-				left_arm[j++] = zed_body.keypoint[i].z;
-				left_arm[j++] = zed_body.local_orientation_per_joint[i].x;
-				left_arm[j++] = zed_body.local_orientation_per_joint[i].y;
-				left_arm[j++] = zed_body.local_orientation_per_joint[i].z;
-				left_arm[j++] = zed_body.local_orientation_per_joint[i].w;	
-			}
-
-			left_arm_plot.update(left_arm);
-			
-			j = 0;
-			for (int i = 11; i <= 16; i++)
-			{
-				right_arm[j++] = zed_body.keypoint[i].x;
-				right_arm[j++] = zed_body.keypoint[i].y;
-				right_arm[j++] = zed_body.keypoint[i].z;
-				right_arm[j++] = zed_body.local_orientation_per_joint[i].x;
-				right_arm[j++] = zed_body.local_orientation_per_joint[i].y;
-				right_arm[j++] = zed_body.local_orientation_per_joint[i].z;
-				right_arm[j++] = zed_body.local_orientation_per_joint[i].w;
-			}
-
-			right_arm_plot.update(right_arm);
 
 
 			j = 0;
-			for (int i = 18; i <= 21; i++)
+			for (int i = 4; i <= 16; i++)
 			{
-				left_leg[j++] = zed_body.keypoint[i].x;
-				left_leg[j++] = zed_body.keypoint[i].y;
-				left_leg[j++] = zed_body.keypoint[i].z;
-				left_leg[j++] = zed_body.local_orientation_per_joint[i].x;
-				left_leg[j++] = zed_body.local_orientation_per_joint[i].y;
-				left_leg[j++] = zed_body.local_orientation_per_joint[i].z;
-				left_leg[j++] = zed_body.local_orientation_per_joint[i].w;
+				arms[j++] = zed_body.keypoint[i].x;
+				arms[j++] = zed_body.keypoint[i].y;
+				arms[j++] = zed_body.keypoint[i].z;
+				arms[j++] = zed_body.local_orientation_per_joint[i].x;
+				arms[j++] = zed_body.local_orientation_per_joint[i].y;
+				arms[j++] = zed_body.local_orientation_per_joint[i].z;
+				arms[j++] = zed_body.local_orientation_per_joint[i].w;
 			}
-
-			left_leg_plot.update(left_leg);
 
 			j = 0;
-			for (int i = 22; i <= 25; i++)
+			for (int i = 18; i <= 25; i++)
 			{
-				right_leg[j++] = zed_body.keypoint[i].x;
-				right_leg[j++] = zed_body.keypoint[i].y;
-				right_leg[j++] = zed_body.keypoint[i].z;
-				right_leg[j++] = zed_body.local_orientation_per_joint[i].x;
-				right_leg[j++] = zed_body.local_orientation_per_joint[i].y;
-				right_leg[j++] = zed_body.local_orientation_per_joint[i].z;
-				right_leg[j++] = zed_body.local_orientation_per_joint[i].w;
-			}
-
-			right_leg_plot.update(right_leg);
-
-
-
-
-			if (trainingModeActive) {
-
-				//Add the current sample to the training data
-
-				if (!trainingDataBody.addSample(trainingClassLabel, body)) {
-					infoText = "WARNING: Failed to add training sample to training data!";
-				}
-				//if (!trainingDataLeftArm.addSample(trainingClassLabel, left_arm)) {
-				//	infoText = "WARNING: Failed to add training sample to training data!";
-				//}
-				//if (!trainingDataRightArm.addSample(trainingClassLabel, right_arm)) {
-				//	infoText = "WARNING: Failed to add training sample to training data!";
-				//}
-				//if (!trainingDataLeftLeg.addSample(trainingClassLabel, left_leg)) {
-				//	infoText = "WARNING: Failed to add training sample to training data!";
-				//}
-				//if (!trainingDataRightLeg.addSample(trainingClassLabel, right_leg)) {
-				//	infoText = "WARNING: Failed to add training sample to training data!";
-				//}
-
-			}
-
-			//Update the prediction mode if active
-			if (predictionModeActive) {
-				if (pipeline.predict(body)) {
-					predictedClassLabel = pipeline.getPredictedClassLabel();
-					predictionPlot.update(pipeline.getClassLikelihoods());
-				}
-				else {
-					
-					infoText = "ERROR: Failed to run prediction!";
-				}
-			}
-			else {
-				pipeline.preProcessData(body);
+				legs[j++] = zed_body.keypoint[i].x;
+				legs[j++] = zed_body.keypoint[i].y;
+				legs[j++] = zed_body.keypoint[i].z;
+				legs[j++] = zed_body.local_orientation_per_joint[i].x;
+				legs[j++] = zed_body.local_orientation_per_joint[i].y;
+				legs[j++] = zed_body.local_orientation_per_joint[i].z;
+				legs[j++] = zed_body.local_orientation_per_joint[i].w;
 			}
 		}
 	}
-	else if (state == sl::ERROR_CODE::END_OF_SVOFILE_REACHED)
-	{
+	else if (state == sl::ERROR_CODE::END_OF_SVOFILE_REACHED) {
 		zed.setSVOPosition(0);
+	}
+	bodyPlot.update(body);
+	armsPlot.update(arms);
+	legsPlot.update(legs);
+
+
+	if (trainingModeBodyActive) {
+		//Add the current sample to the training data
+		if (!trainingDataBody.addSample(trainingClassLabelBody, body)) {
+			infoText = "WARNING: Failed to add training sample to training data!";
+		}
+	}
+
+	if (trainingModeArmsActive) {
+		if (!trainingDataArms.addSample(trainingClassLabelArms, arms)) {
+			infoText = "WARNING: Failed to add training sample to training data!";
+		}
+	}
+
+	if (trainingClassLabelLegs) {
+		if (!trainingDataLegs.addSample(trainingClassLabelLegs, legs)) {
+			infoText = "WARNING: Failed to add training sample to training data!";
+		}
+	}
+
+	//Update the prediction mode if active
+	if (predictionModeActiveBody) {
+		if (pipelineBody.predict(body)) {
+			predictedClassLabelBody = pipelineBody.getPredictedClassLabel();
+		}
+		else {
+
+			infoText = "ERROR: Failed to run prediction body!";
+		}
+	}
+	else {
+		pipelineBody.preProcessData(body);
+	}
+
+	if (predictionModeActiveArms) {
+		if (pipelineArms.predict(arms)) {
+			predictedClassLabelArms = pipelineArms.getPredictedClassLabel();
+		}
+		else {
+
+			infoText = "ERROR: Failed to run prediction arms!";
+		}
+	}
+	else {
+		pipelineArms.preProcessData(arms);
+	}
+
+	if (predictionModeActiveLegs) {
+		if (pipelineLegs.predict(legs)) {
+			predictedClassLabelLegs = pipelineLegs.getPredictedClassLabel();
+		}
+		else {
+
+			infoText = "ERROR: Failed to run prediction legs!";
+		}
+	}
+	else {
+		pipelineLegs.preProcessData(legs);
 	}
 }
 
@@ -281,7 +308,9 @@ void ofApp::draw() {
 		smallFont.drawString("[1,2,3]: Set Class Label", textX, textY); textY += textSpacer;
 
 		textY += textSpacer;
-		smallFont.drawString("Class Label: " + ofToString(trainingClassLabel), textX, textY); textY += textSpacer;
+		smallFont.drawString("Class Label Body: " + ofToString(trainingClassLabelBody), textX, textY); textY += textSpacer;
+		smallFont.drawString("Class Label Arms: " + ofToString(trainingClassLabelArms), textX, textY); textY += textSpacer;
+		smallFont.drawString("Class Label Legs: " + ofToString(trainingClassLabelLegs), textX, textY); textY += textSpacer;
 		smallFont.drawString("Recording: " + ofToString(recordTrainingData), textX, textY); textY += textSpacer;
 		smallFont.drawString("Num Samples: " + ofToString(trainingDataBody.getNumSamples()), textX, textY); textY += textSpacer;
 		smallFont.drawString(infoText, textX, textY); textY += textSpacer;
@@ -292,9 +321,11 @@ void ofApp::draw() {
 	}
 
 	//Draw the data graph
-	bodyPlot.draw(graphX, graphY, graphW, graphH); graphY += graphH * 1.1;
+	bodyPlot.draw(graphX, graphY, graphW, graphH); graphY += graphH * 1.05;
+	armsPlot.draw(graphX, graphY, graphW, graphH); graphY += graphH * 1.05;
+	legsPlot.draw(graphX, graphY, graphW, graphH); graphY += graphH * 1.05;
 
-	if (trainingModeActive) {
+	if (trainingModeBodyActive) {
 		char strBuffer[1024];
 
 		ofSetColor(255, 150, 0);
@@ -305,15 +336,48 @@ void ofApp::draw() {
 		hugeFont.drawString(strBuffer, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 3);
 	}
 
-	//If the model has been trained, then draw the texture
-	if (pipeline.getTrained()) {
-		predictionPlot.draw(graphX, graphY, graphW, graphH); graphY += graphH * 1.1;
+	if (trainingModeArmsActive) {
+		char strBuffer[1024];
 
-		std::string txt = "Predicted Class: " + ofToString(predictedClassLabel);
+		ofSetColor(255, 150, 0);
+		sprintf(strBuffer, "Training Mode Active");
+
+		std::string txt = strBuffer;
+		ofRectangle bounds = hugeFont.getStringBoundingBox(txt, 0, 0);
+		hugeFont.drawString(strBuffer, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 2);
+	}
+
+	if (trainingModeLegsActive) {
+		char strBuffer[1024];
+
+		ofSetColor(255, 150, 0);
+		sprintf(strBuffer, "Training Mode Active");
+
+		std::string txt = strBuffer;
+		ofRectangle bounds = hugeFont.getStringBoundingBox(txt, 0, 0);
+		hugeFont.drawString(strBuffer, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 1);
+	}
+
+	//If the model has been trained, then draw the texture
+	if (pipelineBody.getTrained() && predictionModeActiveBody) {
+		std::string txt = "Predicted Class: " + ofToString(predictedClassLabelBody);
 		ofRectangle bounds = hugeFont.getStringBoundingBox(txt, 0, 0);
 		ofSetColor(0, 0, 255);
 		hugeFont.drawString(txt, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 3);
 	}
+	if (pipelineArms.getTrained() && predictionModeActiveArms) {
+		std::string txt = "Predicted Class: " + ofToString(predictedClassLabelArms);
+		ofRectangle bounds = hugeFont.getStringBoundingBox(txt, 0, 0);
+		ofSetColor(0, 0, 255);
+		hugeFont.drawString(txt, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 2);
+	}
+	if (pipelineLegs.getTrained() && predictionModeActiveLegs) {
+		std::string txt = "Predicted Class: " + ofToString(predictedClassLabelLegs);
+		ofRectangle bounds = hugeFont.getStringBoundingBox(txt, 0, 0);
+		ofSetColor(0, 0, 255);
+		hugeFont.drawString(txt, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 1);
+	}
+
 	ofPopStyle();
 	ofPopMatrix();
 
@@ -387,50 +451,105 @@ void ofApp::keyPressed(int key) {
 	bool buildTexture = false;
 
 	switch (key) {
-	case 'r':
-		predictionModeActive = false;
-		trainingModeActive = !trainingModeActive;
+	case 'q':
+		predictionModeActiveBody = false;
+		trainingModeBodyActive = !trainingModeBodyActive;
+		break;
+	case 'w':
+		predictionModeActiveArms = false;
+		trainingModeArmsActive = !trainingModeArmsActive;
+		break;
+	case 'e':
+		predictionModeActiveLegs = false;
+		trainingModeLegsActive = !trainingModeLegsActive;
 		break;
 	case '1':
-		trainingClassLabel = 1;
+		trainingClassLabelBody = 1;
 		break;
 	case '2':
-		trainingClassLabel = 2;
+		trainingClassLabelBody = 2;
 		break;
 	case '3':
-		trainingClassLabel = 3;
+		trainingClassLabelBody = 3;
+		break;
+	case '4':
+		trainingClassLabelArms = 1;
+		break;
+	case '5':
+		trainingClassLabelArms = 2;
+		break;
+	case '6':
+		trainingClassLabelArms = 3;
+		break;
+	case '7':
+		trainingClassLabelLegs = 1;
+		break;
+	case '8':
+		trainingClassLabelLegs = 2;
+		break;
+	case '9':
+		trainingClassLabelLegs = 3;
 		break;
 	case 't':
-		if (pipeline.train(trainingDataBody)) {
+		if (pipelineBody.train(trainingDataBody)) {
 			infoText = "Pipeline Trained";
-			std::cout << "getNumClasses: " << pipeline.getNumClasses() << std::endl;
-			predictionPlot.setup(500, pipeline.getNumClasses(), "prediction likelihoods");
-			predictionPlot.setDrawGrid(true);
-			predictionPlot.setDrawInfoText(true);
-			predictionPlot.setFont(smallFont);
-			predictionPlot.setBackgroundColor(ofColor(255, 255, 255));
-			predictionModeActive = true;
+			std::cout << "getNumClasses: " << pipelineBody.getNumClasses() << std::endl;
+			predictionModeActiveBody = true;
+		}
+		break;
+	case 'y':
+		if (pipelineArms.train(trainingDataArms)) {
+			infoText = "Pipeline Trained";
+			std::cout << "getNumClasses: " << pipelineArms.getNumClasses() << std::endl;
+			predictionModeActiveArms = true;
+		}
+		break;
+	case 'u':
+		if (pipelineLegs.train(trainingDataLegs)) {
+			infoText = "Pipeline Trained";
+			std::cout << "getNumClasses: " << pipelineLegs.getNumClasses() << std::endl;
+			predictionModeActiveLegs = true;
 		}
 		else infoText = "WARNING: Failed to train pipeline";
 		break;
 	case 's':
-		if (trainingDataBody.save(ofToDataPath("TrainingData.grt"))) {
+		if (trainingDataBody.save(ofToDataPath("TrainingDataBody.grt"))) {
+			infoText = "Training data saved to file";
+		}
+		if (trainingDataArms.save(ofToDataPath("TrainingDataArms.grt"))) {
+			infoText = "Training data saved to file";
+		}
+		if (trainingDataLegs.save(ofToDataPath("TrainingDataLegs.grt"))) {
 			infoText = "Training data saved to file";
 		}
 		else infoText = "WARNING: Failed to save training data to file";
 		break;
 	case 'l':
-		if (trainingDataBody.load(ofToDataPath("TrainingData.grt"))) {
+		if (trainingDataBody.load(ofToDataPath("TrainingDataBody.grt"))) {
+			infoText = "Training data saved to file";
+		}
+		if (trainingDataArms.load(ofToDataPath("TrainingDataArms.grt"))) {
+			infoText = "Training data saved to file";
+		}
+		if (trainingDataLegs.load(ofToDataPath("TrainingDataLegs.grt"))) {
 			infoText = "Training data saved to file";
 		}
 		else infoText = "WARNING: Failed to load training data from file";
 		break;
 	case 'c':
 		trainingDataBody.clear();
+		trainingDataArms.clear();
+		trainingDataLegs.clear();
 		infoText = "Training data cleared";
 		break;
 	case 'i':
 		drawInfo = !drawInfo;
+		break;
+	case ' ':
+		grabFrame = !grabFrame;
+		if (!grabFrame) {
+			zed.setSVOPosition(frame);
+		}
 		break;
 	default:
 		break;

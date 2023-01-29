@@ -50,37 +50,43 @@ class ofApp : public ofBaseApp{
 
 		//Create some variables for the demo
 		ClassificationData trainingDataBody;
-		ClassificationData trainingDataLeftArm;
-		ClassificationData trainingDataRightArm;
-		ClassificationData trainingDataLeftLeg; 
-		ClassificationData trainingDataRightLeg; //This will store our training data
-		GestureRecognitionPipeline pipeline;        //This is a wrapper for our classifier and any pre/post processing modules 
+		ClassificationData trainingDataArms;
+		ClassificationData trainingDataLegs;//This will store our training data
+		GestureRecognitionPipeline pipelineBody;       
+		GestureRecognitionPipeline pipelineLegs;
+		GestureRecognitionPipeline pipelineArms;  //This is a wrapper for our classifier and any pre/post processing modules 
 		bool recordTrainingData;                                //This is a flag that keeps track of when we should record training data
-		bool trainingModeActive;
-		bool predictionModeActive;
+		bool trainingModeBodyActive;
+		bool trainingModeArmsActive;
+		bool trainingModeLegsActive;
+		bool predictionModeActiveBody;
+		bool predictionModeActiveArms;
+		bool predictionModeActiveLegs;
 		bool drawInfo;
 		VectorFloat body;
-		VectorFloat left_arm;
-		VectorFloat right_arm;
-		VectorFloat left_leg;
-		VectorFloat right_leg;
-		UINT trainingClassLabel;                    //This will hold the current label for when we are training the classifier
-		UINT predictedClassLabel;
+		VectorFloat arms;
+		VectorFloat legs;
+		UINT trainingClassLabelBody;  
+		UINT trainingClassLabelArms;  
+		UINT trainingClassLabelLegs;  //This will hold the current label for when we are training the classifier
+		UINT predictedClassLabelBody;
+		UINT predictedClassLabelArms;
+		UINT predictedClassLabelLegs;
+		int frame;
+		int numFrames;
 		string infoText;                            //This string will be used to draw some info messages to the main app window
 		ofTrueTypeFont largeFont;
 		ofTrueTypeFont smallFont;
 		ofTrueTypeFont hugeFont;
 		ofxGrtTimeseriesPlot bodyPlot;
-		ofxGrtTimeseriesPlot left_arm_plot;
-		ofxGrtTimeseriesPlot right_arm_plot;
-		ofxGrtTimeseriesPlot left_leg_plot;
-		ofxGrtTimeseriesPlot right_leg_plot;
-		ofxGrtTimeseriesPlot predictionPlot;
+		ofxGrtTimeseriesPlot armsPlot;
+		ofxGrtTimeseriesPlot legsPlot;
 		Timer trainingTimer;
 		int zedHeight, zedWidth;
 		unsigned char* colorBuffer;
 
 		vector<ofNode> nodeBody;
 		ofEasyCam cam;
+		bool grabFrame;
 		
 };
