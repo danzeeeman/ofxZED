@@ -12,11 +12,11 @@ void ofApp::setup() {
 	InitParameters init_parameters;
 
 	init_parameters.svo_real_time_mode = true;
-	sl::String path = sl::String(ofToDataPath("recordings/retire-tour-lente-2.svo").c_str());
+	sl::String path = sl::String(ofToDataPath("recordings/simple-rond-en-dedans-1.svo").c_str());
 	init_parameters.input.setFromSVOFile(path);
 	//init_parameters.camera_resolution = RESOLUTION::HD720;
 	// On Jetson the object detection combined with an heavy depth mode could reduce the frame rate too much
-	init_parameters.depth_mode = DEPTH_MODE::QUALITY;
+	init_parameters.depth_mode = DEPTH_MODE::ULTRA;
 	init_parameters.coordinate_system = COORDINATE_SYSTEM::RIGHT_HANDED_Y_UP;
 	init_parameters.coordinate_units = UNIT::CENTIMETER;
 	//init_parameters.camera_fps = 60;
@@ -40,9 +40,9 @@ void ofApp::setup() {
 
 	ObjectDetectionParameters obj_det_params;
 	obj_det_params.enable_tracking = true; // track people across images flow
-	obj_det_params.enable_body_fitting = true;// smooth skeletons moves
+	obj_det_params.enable_body_fitting = false;// smooth skeletons moves
 	obj_det_params.body_format = sl::BODY_FORMAT::POSE_34;
-	obj_det_params.detection_model = DETECTION_MODEL::HUMAN_BODY_FAST;
+	obj_det_params.detection_model = DETECTION_MODEL::HUMAN_BODY_ACCURATE;
 	returned_state = zed.enableObjectDetection(obj_det_params);
 	if (returned_state != ERROR_CODE::SUCCESS) {
 		zed.close();
@@ -70,20 +70,23 @@ void ofApp::setup() {
 	trainingModeBodyActive = false;
 	trainingModeArmsActive = false;
 	trainingModeLegsActive = false;
-	recordTrainingData = false;
+	trainingModeActive = false;
 	grabFrame = true;
 	predictionModeActiveBody = false;
 	predictionModeActiveArms = false;
 	predictionModeActiveLegs = false;
+	predictionModeActive = false;
 	drawInfo = true;
 	body.resize(7 * 34);
 	legs.resize(7 * 8);
 	arms.resize(7 * 14);
+	meta.resize(3);
 
 	//The input to the training data will be the [x y z] from the left and right hand, so we set the number of dimensions to 6
 	trainingDataBody.setNumDimensions(body.getSize());
 	trainingDataArms.setNumDimensions(arms.getSize());
 	trainingDataLegs.setNumDimensions(legs.getSize());
+	trainingData.setNumDimensions(meta.getSize());
 
 	//set the default classifier
 	ANBC naiveBayesBody;
@@ -107,6 +110,13 @@ void ofApp::setup() {
 	pipelineLegs << EnvelopeExtractor(15, trainingDataLegs.getNumDimensions());
 	pipelineLegs << naiveBayesLegs;
 
+	ANBC naiveBayes;
+	naiveBayes.enableNullRejection(true);
+	naiveBayes.setNullRejectionCoeff(5.0);
+	pipeline << MovingAverageFilter(5, trainingDataLegs.getNumDimensions());
+	pipeline << EnvelopeExtractor(15, trainingDataLegs.getNumDimensions());
+	pipeline << naiveBayes;
+
 
 	bodyPlot.setup(500, body.getSize(), "body");
 	bodyPlot.setDrawGrid(true);
@@ -124,8 +134,13 @@ void ofApp::setup() {
 	legsPlot.setDrawGrid(true);
 	legsPlot.setDrawInfoText(false);
 	legsPlot.setFont(smallFont);
-	bodyPlot.setBackgroundColor(ofColor(255, 255, 255));
-	colorBuffer = new unsigned char[zedWidth * zedHeight * 3];
+	legsPlot.setBackgroundColor(ofColor(255, 255, 255));
+
+	metaPlot.setup(500, meta.getSize(), "meta");
+	metaPlot.setDrawGrid(true);
+	metaPlot.setDrawInfoText(false);
+	metaPlot.setFont(smallFont);
+	metaPlot.setBackgroundColor(ofColor(255, 255, 255));
 
 	pos.set(2000, 0, 500);
 	setup_comms();
@@ -133,6 +148,7 @@ void ofApp::setup() {
 	nodeBody.assign(34, ofNode());
 	frame = 0;
 	numFrames = zed.getSVONumberOfFrames();
+	cam.setDistance(15);
 }
 
 void ofApp::setup_comms()
@@ -208,9 +224,12 @@ void ofApp::update() {
 	else if (state == sl::ERROR_CODE::END_OF_SVOFILE_REACHED) {
 		zed.setSVOPosition(0);
 	}
+
+
 	bodyPlot.update(body);
 	armsPlot.update(arms);
 	legsPlot.update(legs);
+	
 
 
 	if (trainingModeBodyActive) {
@@ -226,7 +245,7 @@ void ofApp::update() {
 		}
 	}
 
-	if (trainingClassLabelLegs) {
+	if (trainingModeLegsActive) {
 		if (!trainingDataLegs.addSample(trainingClassLabelLegs, legs)) {
 			infoText = "WARNING: Failed to add training sample to training data!";
 		}
@@ -271,6 +290,33 @@ void ofApp::update() {
 	else {
 		pipelineLegs.preProcessData(legs);
 	}
+
+
+	int j = 0;
+	meta[j++] = predictedClassLabelBody;
+	meta[j++] = predictedClassLabelArms;
+	meta[j++] = predictedClassLabelLegs;
+	metaPlot.update(meta);
+
+
+	if (trainingModeActive) {
+		if (!trainingData.addSample(trainingClassLabel, meta)) {
+			infoText = "WARNING: Failed to add training sample to training data!";
+		}
+	}
+
+	if (predictionModeActive) {
+		if (pipeline.predict(meta)) {
+			predictedClassLabel = pipeline.getPredictedClassLabel();
+		}
+		else {
+
+			infoText = "ERROR: Failed to run prediction legs!";
+		}
+	}
+	else {
+		pipelineLegs.preProcessData(legs);
+	}
 }
 
 
@@ -278,7 +324,7 @@ void ofApp::update() {
 void ofApp::draw() {
 	ofBackground(0, 0, 0);
 	int marginX = 5;
-	int marginY = 5;
+	int marginY = 10;
 	int graphX = marginX;
 	int graphY = marginY;
 	int graphW = ofGetWidth() - graphX * 2;
@@ -300,7 +346,7 @@ void ofApp::draw() {
 		ofDrawRectangle(infoX, 5, infoW, 225);
 		ofSetColor(255, 255, 255);
 
-		largeFont.drawString("GRT Classifier Example", textX, textY); textY += textSpacer * 2;
+		textY += textSpacer * 2;
 
 		smallFont.drawString("[i]: Toogle Info", textX, textY); textY += textSpacer;
 		smallFont.drawString("[r]: Toggle Recording", textX, textY); textY += textSpacer;
@@ -311,8 +357,9 @@ void ofApp::draw() {
 		smallFont.drawString("Class Label Body: " + ofToString(trainingClassLabelBody), textX, textY); textY += textSpacer;
 		smallFont.drawString("Class Label Arms: " + ofToString(trainingClassLabelArms), textX, textY); textY += textSpacer;
 		smallFont.drawString("Class Label Legs: " + ofToString(trainingClassLabelLegs), textX, textY); textY += textSpacer;
-		smallFont.drawString("Recording: " + ofToString(recordTrainingData), textX, textY); textY += textSpacer;
 		smallFont.drawString("Num Samples: " + ofToString(trainingDataBody.getNumSamples()), textX, textY); textY += textSpacer;
+		smallFont.drawString("Num Samples: " + ofToString(trainingDataArms.getNumSamples()), textX, textY); textY += textSpacer;
+		smallFont.drawString("Num Samples: " + ofToString(trainingDataLegs.getNumSamples()), textX, textY); textY += textSpacer;
 		smallFont.drawString(infoText, textX, textY); textY += textSpacer;
 
 		//Update the graph position
@@ -324,6 +371,7 @@ void ofApp::draw() {
 	bodyPlot.draw(graphX, graphY, graphW, graphH); graphY += graphH * 1.05;
 	armsPlot.draw(graphX, graphY, graphW, graphH); graphY += graphH * 1.05;
 	legsPlot.draw(graphX, graphY, graphW, graphH); graphY += graphH * 1.05;
+	metaPlot.draw(graphX, graphY, graphW, graphH); graphY += graphH * 1.05;
 
 	if (trainingModeBodyActive) {
 		char strBuffer[1024];
@@ -363,16 +411,22 @@ void ofApp::draw() {
 		std::string txt = "Predicted Class: " + ofToString(predictedClassLabelBody);
 		ofRectangle bounds = hugeFont.getStringBoundingBox(txt, 0, 0);
 		ofSetColor(0, 0, 255);
-		hugeFont.drawString(txt, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 3);
+		hugeFont.drawString(txt, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 4);
 	}
 	if (pipelineArms.getTrained() && predictionModeActiveArms) {
 		std::string txt = "Predicted Class: " + ofToString(predictedClassLabelArms);
 		ofRectangle bounds = hugeFont.getStringBoundingBox(txt, 0, 0);
 		ofSetColor(0, 0, 255);
-		hugeFont.drawString(txt, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 2);
+		hugeFont.drawString(txt, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 3);
 	}
 	if (pipelineLegs.getTrained() && predictionModeActiveLegs) {
 		std::string txt = "Predicted Class: " + ofToString(predictedClassLabelLegs);
+		ofRectangle bounds = hugeFont.getStringBoundingBox(txt, 0, 0);
+		ofSetColor(0, 0, 255);
+		hugeFont.drawString(txt, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 2);
+	}
+	if (pipeline.getTrained() && predictionModeActive) {
+		std::string txt = "Predicted Class: " + ofToString(predictedClassLabel);
 		ofRectangle bounds = hugeFont.getStringBoundingBox(txt, 0, 0);
 		ofSetColor(0, 0, 255);
 		hugeFont.drawString(txt, ofGetWidth() / 2 - bounds.width * 0.5, ofGetHeight() - bounds.height * 1);
@@ -383,9 +437,13 @@ void ofApp::draw() {
 
 	ofPushMatrix();
 	ofPushStyle();
-	cam.begin();
+	cam.begin(ofRectangle(0, graphY, ofGetWidth(), ofGetHeight() - graphY));
 	for (auto& node : nodeBody) {
-		node.draw();
+		ofPushMatrix();
+		ofMultMatrix(node.getGlobalTransformMatrix());
+		ofDrawBox(3);
+		ofDrawAxis(6);
+		ofPopMatrix();
 	}
 	cam.end();
 	ofPopStyle();
@@ -463,6 +521,10 @@ void ofApp::keyPressed(int key) {
 		predictionModeActiveLegs = false;
 		trainingModeLegsActive = !trainingModeLegsActive;
 		break;
+	case 'n':
+		predictionModeActive = false;
+		trainingModeActive = !trainingModeActive;
+		break;
 	case '1':
 		trainingClassLabelBody = 1;
 		break;
@@ -512,6 +574,14 @@ void ofApp::keyPressed(int key) {
 		}
 		else infoText = "WARNING: Failed to train pipeline";
 		break;
+	case 'm':
+		if (pipeline.train(trainingData)) {
+			infoText = "Pipeline Trained";
+			std::cout << "getNumClasses: " << pipeline.getNumClasses() << std::endl;
+			predictionModeActive = true;
+		}
+		else infoText = "WARNING: Failed to train pipeline";
+		break;
 	case 's':
 		if (trainingDataBody.save(ofToDataPath("TrainingDataBody.grt"))) {
 			infoText = "Training data saved to file";
@@ -520,6 +590,9 @@ void ofApp::keyPressed(int key) {
 			infoText = "Training data saved to file";
 		}
 		if (trainingDataLegs.save(ofToDataPath("TrainingDataLegs.grt"))) {
+			infoText = "Training data saved to file";
+		}
+		if (trainingData.save(ofToDataPath("TrainingData.grt"))) {
 			infoText = "Training data saved to file";
 		}
 		else infoText = "WARNING: Failed to save training data to file";
@@ -532,6 +605,9 @@ void ofApp::keyPressed(int key) {
 			infoText = "Training data saved to file";
 		}
 		if (trainingDataLegs.load(ofToDataPath("TrainingDataLegs.grt"))) {
+			infoText = "Training data saved to file";
+		}
+		if (trainingData.load(ofToDataPath("TrainingData.grt"))) {
 			infoText = "Training data saved to file";
 		}
 		else infoText = "WARNING: Failed to load training data from file";

@@ -48,6 +48,10 @@ class ofApp : public ofBaseApp{
 		ObjectDetectionRuntimeParameters objectTracker_parameters_rt;
 		ofVec3f pos;
 
+		GestureRecognitionPipeline pipeline;
+		ClassificationData trainingData;
+		VectorFloat meta;
+
 		//Create some variables for the demo
 		ClassificationData trainingDataBody;
 		ClassificationData trainingDataArms;
@@ -55,10 +59,12 @@ class ofApp : public ofBaseApp{
 		GestureRecognitionPipeline pipelineBody;       
 		GestureRecognitionPipeline pipelineLegs;
 		GestureRecognitionPipeline pipelineArms;  //This is a wrapper for our classifier and any pre/post processing modules 
-		bool recordTrainingData;                                //This is a flag that keeps track of when we should record training data
+		bool recordTrainingData;
+		bool trainingModeActive;//This is a flag that keeps track of when we should record training data
 		bool trainingModeBodyActive;
 		bool trainingModeArmsActive;
 		bool trainingModeLegsActive;
+		bool predictionModeActive;
 		bool predictionModeActiveBody;
 		bool predictionModeActiveArms;
 		bool predictionModeActiveLegs;
@@ -66,9 +72,11 @@ class ofApp : public ofBaseApp{
 		VectorFloat body;
 		VectorFloat arms;
 		VectorFloat legs;
+		UINT trainingClassLabel;
 		UINT trainingClassLabelBody;  
 		UINT trainingClassLabelArms;  
-		UINT trainingClassLabelLegs;  //This will hold the current label for when we are training the classifier
+		UINT trainingClassLabelLegs;
+		UINT predictedClassLabel; //This will hold the current label for when we are training the classifier
 		UINT predictedClassLabelBody;
 		UINT predictedClassLabelArms;
 		UINT predictedClassLabelLegs;
@@ -78,6 +86,7 @@ class ofApp : public ofBaseApp{
 		ofTrueTypeFont largeFont;
 		ofTrueTypeFont smallFont;
 		ofTrueTypeFont hugeFont;
+		ofxGrtTimeseriesPlot metaPlot;
 		ofxGrtTimeseriesPlot bodyPlot;
 		ofxGrtTimeseriesPlot armsPlot;
 		ofxGrtTimeseriesPlot legsPlot;
